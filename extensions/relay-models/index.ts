@@ -21,6 +21,7 @@ import {
 	getAgentDir,
 	keyHint,
 	truncateHead,
+	VERSION,
 	type ExtensionAPI,
 	type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
@@ -41,8 +42,10 @@ import {
 	updateExcludedModelIds,
 	validateProviderId,
 } from "./core.ts";
+import { mergeOfficialCatalog, OfficialCatalog, type OfficialCatalogStatus } from "./catalog.ts";
 import { SPOOF_HEADER_PROFILES } from "./header-profiles.ts";
 import { deleteJsonRecordKey } from "./state.ts";
+import { formatHistoricalUsage, scanHistoricalUsage } from "./usage.ts";
 
 interface ConfigFile {
 	version: 1;
@@ -73,6 +76,7 @@ interface RelayReport {
 	mappings: NonNullable<RelayConfig["modelMappings"]>;
 	protocolOverrides: NonNullable<RelayConfig["protocolOverrides"]>;
 	excludedModels: string[];
+	officialCatalog: OfficialCatalogStatus;
 	headerProfiles: {
 		claude: boolean;
 		codex: boolean;
@@ -83,6 +87,7 @@ const AGENT_DIR = getAgentDir();
 const CONFIG_PATH = join(AGENT_DIR, "relay-providers.json");
 const AUTH_PATH = join(AGENT_DIR, "auth.json");
 const MODELS_STORE_PATH = join(AGENT_DIR, "models-store.json");
+const remoteCatalog = new OfficialCatalog(join(AGENT_DIR, "relay-official-models.json"), fetch, Date.now, VERSION);
 const builtinProviderNames = getProviders();
 const builtinProviderIds: ReadonlySet<string> = new Set(builtinProviderNames);
 let officialCatalog: Model<Api>[] = builtinProviderNames.flatMap((provider) => getModels(provider) as Model<Api>[]);
@@ -189,6 +194,8 @@ function makeProvider(config: RelayConfig): Provider<Api> {
 			const key = credential?.type === "api_key" ? credential.key : undefined;
 			if (!key) throw new Error(`No API key for ${config.id}; run /login ${config.id}`);
 
+			await remoteCatalog.refresh({ signal });
+			officialCatalog = mergeOfficialCatalog(officialCatalog, remoteCatalog.getModels());
 			const ids = await fetchModelIds(config, key, signal);
 			const materialized: RelayModelResponse = materializeRelayModels(config, ids, officialCatalog);
 			const result: RelayModelResponse = {
@@ -308,7 +315,7 @@ async function removeRelayForAi(
 
 function refreshOfficialCatalog(ctx: Pick<ExtensionCommandContext, "modelRegistry">): void {
 	const live = ctx.modelRegistry.getAll().filter((model) => builtinProviderIds.has(model.provider));
-	if (live.length > 0) officialCatalog = live;
+	officialCatalog = mergeOfficialCatalog(live.length > 0 ? live : officialCatalog, remoteCatalog.getModels());
 }
 
 function protocolDescription(protocol: RelayProtocol): string {
@@ -367,6 +374,7 @@ function relayStatusResultPreview(reports: readonly RelayReport[]): { text: stri
 	let remaining = 0;
 	for (const report of reports) {
 		lines.push(`${report.providerId} (${report.displayName})`);
+		if (report.officialCatalog?.warning) lines.push(`  ${report.officialCatalog.warning}`);
 		if (report.modelCount === undefined) {
 			lines.push(`  not synced; run /login ${report.providerId}`);
 			continue;
@@ -424,6 +432,7 @@ function relayReports(providerId?: string): RelayReport[] {
 				mappings: config.modelMappings ?? {},
 				protocolOverrides: config.protocolOverrides ?? {},
 				excludedModels: config.excludedModels ?? [],
+				officialCatalog: remoteCatalog.getStatus(),
 				headerProfiles: {
 					claude: Boolean(SPOOF_HEADER_PROFILES.claude || SPOOF_HEADER_PROFILES.claudeLongContext),
 					codex: Boolean(SPOOF_HEADER_PROFILES.codex),
@@ -766,15 +775,41 @@ function listRelays(ctx: ExtensionCommandContext): void {
 	ctx.ui.notify(lines.join("\n"), "info");
 }
 
+async function showRelayUsage(args: string, ctx: ExtensionCommandContext): Promise<void> {
+	const providerId = args.trim() || undefined;
+	if (providerId && /\s/.test(providerId)) {
+		ctx.ui.notify("Usage: /relay-usage [provider-id]", "error");
+		return;
+	}
+	ctx.ui.setStatus("relay-usage", "scanning historical token usage…");
+	try {
+		const sessionFile = ctx.sessionManager.getSessionFile();
+		const report = await scanHistoricalUsage({
+			sessionDirs: [join(AGENT_DIR, "sessions"), ctx.sessionManager.getSessionDir()],
+			sessionFiles: sessionFile ? [sessionFile] : [],
+			currentEntries: ctx.sessionManager.getEntries(),
+		});
+		const names = new Map(configFile.providers.map((provider) => [provider.id, provider.name]));
+		ctx.ui.notify(formatHistoricalUsage(report, names, providerId), "info");
+	} catch (error) {
+		ctx.ui.notify(`Cannot scan historical usage: ${error instanceof Error ? error.message : String(error)}`, "error");
+	} finally {
+		ctx.ui.setStatus("relay-usage", undefined);
+	}
+}
+
 async function syncRelays(ctx: ExtensionCommandContext): Promise<void> {
 	if (configFile.providers.length === 0) {
 		ctx.ui.notify("No relay providers configured. Run /relay-add.", "info");
 		return;
 	}
 
-	refreshOfficialCatalog(ctx);
-	ctx.ui.setStatus("relay-models", "syncing relay models…");
+	ctx.ui.setStatus("relay-models", "syncing official catalog and relay models…");
 	try {
+		await remoteCatalog.refresh({ force: true });
+		refreshOfficialCatalog(ctx);
+		const catalogStatus = remoteCatalog.getStatus();
+		if (catalogStatus.warning) ctx.ui.notify(catalogStatus.warning, "warning");
 		await ctx.modelRegistry.refresh();
 		const lines = relayReports().flatMap((report) => {
 			if (report.modelCount === undefined) return [`${report.providerId}: skipped (run /login ${report.providerId})`];
@@ -800,6 +835,8 @@ async function syncRelays(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 export default async function relayModelsExtension(pi: ExtensionAPI) {
+	await remoteCatalog.restore();
+	officialCatalog = mergeOfficialCatalog(officialCatalog, remoteCatalog.getModels());
 	try {
 		configFile = await loadConfig();
 		for (const config of configFile.providers) registerConfig(pi, config);
@@ -808,8 +845,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 	}
 
 	pi.on("session_start", (_event, ctx) => {
-		const live = ctx.modelRegistry.getAll().filter((model) => builtinProviderIds.has(model.provider));
-		if (live.length > 0) officialCatalog = live;
+		refreshOfficialCatalog(ctx);
 	});
 
 	pi.registerTool({
@@ -893,6 +929,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 					result = await removeRelayForAi(pi, params, ctx);
 					break;
 				case "sync":
+					await remoteCatalog.refresh({ force: true, signal });
 					refreshOfficialCatalog(ctx);
 					await ctx.modelRegistry.refresh();
 					result = relayReports(params.providerId);
@@ -942,6 +979,10 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 	pi.registerCommand("relay-sync", {
 		description: "Refresh relay models and match pi metadata",
 		handler: async (_args, ctx) => syncRelays(ctx),
+	});
+	pi.registerCommand("relay-usage", {
+		description: "Show historical token usage by provider and model: /relay-usage [provider-id]",
+		handler: async (args, ctx) => showRelayUsage(args, ctx),
 	});
 	pi.registerCommand("relay-list", {
 		description: "List configured relay providers",

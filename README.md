@@ -16,7 +16,7 @@
 
 ## 要求
 
-- pi `0.82.1` 或更高版本
+- pi `0.82.1` 或更高版本；官网最新目录可能要求更高版本，请使用满足状态中 `minimumPiVersion` 要求的 pi。当前官网目录要求 pi `1.2.1` 或更高版本。
 - Node.js `22.6` 或更高版本
 - 中转站提供 OpenAI 或 Anthropic 兼容 API，并能返回模型列表
 
@@ -62,6 +62,10 @@ pi -e npm:pi-relay-models
 /relay-sync
 /relay-list
 ```
+
+`/relay-sync` 和 AI 工具的 `sync` 会先强制检查 [pi.dev/models](https://pi.dev/models) 的 [JSON 目录](https://pi.dev/api/models)，再获取中转站实际提供的模型 ID 并匹配元信息。普通模型发现每四小时检查一次官网，使用 ETag 避免重复下载。匹配到的官网数据优先于本机旧目录，包含价格、上下文、输出限制、thinking map 和兼容性配置。
+
+成功获取的目录会缓存到 agent 目录中的 `relay-official-models.json`，重启后可恢复；官网不可用或返回无效数据时沿用最近成功的缓存，没有缓存时使用本机 pi 目录，并在同步结果中显示警告。`status` / `sync` 的 `officialCatalog` 字段提供目录来源、模型数、获取/检查时间、目录修订号 `revision`、最低版本 `minimumPiVersion`、宿主版本 `runtimeVersion` 及警告。宿主版本低于官网要求时会提示升级 pi，同时保留官网最新目录。官网目录用于补全元信息，可选模型仍取决于中转站返回的列表。
 
 删除中转站及其凭据和模型缓存：
 
@@ -119,6 +123,22 @@ pi -e npm:pi-relay-models
 
 状态报告使用 `matchedModels` 和 `unmatchedModels` 数组返回逐模型信息，不再仅返回匹配数量。`matchedModels` 的每一项包含远端模型 ID、官方元数据来源和实际协议；`unmatchedModels` 还包含候选官方模型。发送给模型的工具内容遵循 Pi 的 2000 行/50KB 上限；超限时会保存完整临时 JSON 并在结果中提供路径，终端显式展开仍可查看完整结构。
 
+## 用量统计
+
+更新扩展后，在 pi 中运行 `/reload`，然后使用：
+
+```text
+/relay-usage [provider-id]
+```
+
+省略 Provider ID 时汇总所有已记录供应商（包括内置供应商、中转站及已删除配置的中转站）；传入 ID 则只看该供应商。当前配置中的中转站显示友好名称。`/session` 只统计当前会话。
+
+命令递归扫描所有项目的 `getAgentDir()/sessions`，并补充当前会话目录、当前会话文件及内存中的会话条目；仅读取本地 JSONL，不联网、不改写历史。默认根目录为 `~/.pi/agent/sessions`，遵循 `PI_CODING_AGENT_DIR`。其他自定义历史路径只能通过当前会话目录或文件发现，不会自动查找以前任意外部目录。
+
+结果按供应商和请求模型 ID（不是 `responseModel`）分组，显示输入、输出、缓存读取/写入 token、这四项之和、记录中的预估美元费用和记录数。`reasoning`、`cacheWrite1h` 属于已有分类的子集，不重复相加。
+
+识别 fork/clone 副本时忽略 `parentId` 并去重；所有分支和压缩前的历史均计入。缺少供应商或模型信息的工具/摘要用量单列为未归属，不会归入筛选的供应商。已删除或缺失的用量无法恢复；预估费用不保证等于中转站账单，旧迁移/复制记录的身份也不总能完全确认。
+
 ## 混合协议路由
 
 每个中转站 Provider 同时注册三种 API：
@@ -137,6 +157,7 @@ Anthropic 模型会自动移除 Base URL 末尾的 `/v1`，避免 SDK 生成重�
 
 - `relay-providers.json`：供应商 URL、映射、协议覆盖和排除规则，权限为 `0600`
 - `models-store.json`：由 pi 管理的模型缓存
+- `relay-official-models.json`：扩展缓存的 pi.dev 官方元信息目录
 - `auth.json`：由 pi `/login` 管理的凭据
 
 `relay-providers.json` 不包含 API Key。不要提交上述本地文件。

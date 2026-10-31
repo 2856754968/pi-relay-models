@@ -17,7 +17,8 @@ test("deletes one provider key while preserving unrelated JSON state", async () 
 
 	assert.equal(await deleteJsonRecordKey(path, "relay-remove"), true);
 	assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { "relay-keep": { value: 42 } });
-	assert.equal((await stat(path)).mode & 0o777, 0o600);
+	// Windows chmod only changes the writable flag; POSIX permission bits are not represented.
+	if (process.platform !== "win32") assert.equal((await stat(path)).mode & 0o777, 0o600);
 	assert.equal(await deleteJsonRecordKey(path, "relay-remove"), false);
 });
 

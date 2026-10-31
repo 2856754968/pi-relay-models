@@ -11,3 +11,4 @@ auth.json
 relay-providers.json
 models-store.json
 models.json
+/.idea/

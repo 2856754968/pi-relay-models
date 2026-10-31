@@ -16,7 +16,7 @@ A mixed-protocol relay extension for [pi](https://github.com/earendil-works/pi-m
 
 ## Requirements
 
-- pi `0.82.1` or newer
+- pi `0.82.1` or newer; the latest website catalog may require a newer runtime. Use a pi version that meets `minimumPiVersion` in catalog status (currently pi `1.2.1` or newer).
 - Node.js `22.6` or newer
 - An OpenAI- or Anthropic-compatible relay that exposes a model list
 
@@ -62,6 +62,10 @@ Enter the API key only in `/login`'s secret prompt. Never send it in chat. After
 /relay-sync
 /relay-list
 ```
+
+`/relay-sync` and the AI tool's `sync` action first force a check of the [JSON catalog](https://pi.dev/api/models) behind [pi.dev/models](https://pi.dev/models), then fetch the relay's actual model IDs and match metadata. Normal model discovery checks the website every four hours, using ETags to avoid redundant downloads. Website metadata takes precedence over stale local entries, including pricing, context windows, output limits, thinking maps, and compatibility settings.
+
+Successful downloads are cached in `relay-official-models.json` in the agent directory and restored on restart. If the website is unavailable or returns invalid data, discovery keeps the last successful cache, falling back to the local pi catalog when no cache exists. Sync results show a warning; the `officialCatalog` field in `status` / `sync` includes the source, model count, fetch/check times, catalog `revision`, `minimumPiVersion`, host `runtimeVersion`, and warning. Older runtimes receive an upgrade warning while retaining the latest website catalog. The website supplies metadata; selectable models still depend on the relay's returned list.
 
 Remove a relay provider together with its credential and model cache:
 
@@ -119,6 +123,22 @@ Collapsed `status` and `sync` results show the provider summary and up to 12 mod
 
 Status reports return per-model details in `matchedModels` and `unmatchedModels` arrays instead of a match count alone. Each `matchedModels` entry includes the remote model ID, official metadata source, and effective protocol; `unmatchedModels` entries also include suggested official candidates. Tool content sent to the model follows Pi's 2,000-line/50KB limit; oversized results are saved as temporary JSON with the path included in the result, while explicit terminal expansion still renders the complete structure.
 
+## Usage statistics
+
+After updating the extension, run `/reload` in pi, then use:
+
+```text
+/relay-usage [provider-id]
+```
+
+Omit the provider ID to include all recorded providers: built-in providers, relays, and relays whose configuration has been removed. Supply an ID to filter to that provider. Relays in the current configuration show friendly names. `/session` covers only the current session.
+
+The command recursively scans `getAgentDir()/sessions` across all projects, plus the active session directory, active file, and current in-memory entries. It only reads local JSONL, with no network requests or history rewrites. The default root is `~/.pi/agent/sessions`, honoring `PI_CODING_AGENT_DIR`. Other custom history locations are discovered only through the active directory or file; old arbitrary external directories are not found automatically.
+
+Results group by provider and requested model ID (not `responseModel`), showing input, output, cache-read/write tokens, the sum of those four categories, recorded estimated USD cost, and record count. `reasoning` and `cacheWrite1h` are subsets and are not added twice.
+
+Fork/clone copies are deduplicated without using `parentId` in their identity; all branches and history before compaction count. Tool/summary usage missing provider or model information appears in a separate unattributed bucket and is never assigned to the filtered provider. Deleted or missing usage cannot be recovered; estimates may differ from relay billing, and old migrated/copied identities cannot always be proven perfectly.
+
 ## Mixed-protocol routing
 
 Each relay provider registers all three APIs:
@@ -137,6 +157,7 @@ The extension uses pi's agent directory and maintains:
 
 - `relay-providers.json`: provider URLs, mappings, protocol overrides, and exclusions; mode `0600`
 - `models-store.json`: model cache managed by pi
+- `relay-official-models.json`: the extension's cached pi.dev metadata catalog
 - `auth.json`: credentials managed by pi's `/login`
 
 `relay-providers.json` never contains API keys. Do not commit these local files.

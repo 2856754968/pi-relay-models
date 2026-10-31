@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Add `/relay-usage [provider-id]` to summarize local usage across projects and providers by requested model, including token totals, recorded estimated costs, copy deduplication, and unattributed usage, without network requests or history rewrites.
+- Update Claude Code and Codex user-agent profiles to verified releases 2.1.316 and 0.166.0; keep protocol beta identifiers and the fixed Codex platform/terminal persona.
+- Refresh relay metadata from the JSON catalog behind pi.dev/models before discovery, with forced checks for command/tool sync and a four-hour interval otherwise.
+- Persist and revalidate the official catalog using ETags, preserve cached/local models when updates fail, and report catalog freshness and fallback warnings.
+- Preserve catalog revision and minimum pi version headers across caching, and warn when the host runtime is too old for the latest website catalog.
+
 ## 0.5.0 - 2026-08-10
 
 - Replace count-only relay match reports with `matchedModels` and `unmatchedModels` entries that expose every model ID, metadata source, effective protocol, and unmatched candidates.
