@@ -4,6 +4,8 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Match relay GPT `-fast` variants to OpenAI base-model metadata when no exact entry exists, preserving remote IDs, explicit mappings, protocol overrides, and exclusions.
+
 - Add `/relay-usage [provider-id]` to summarize local usage across projects and providers by requested model, including token totals, recorded estimated costs, copy deduplication, and unattributed usage, without network requests or history rewrites.
 - Update Claude Code and Codex user-agent profiles to verified releases 2.1.316 and 0.166.0; keep protocol beta identifiers and the fixed Codex platform/terminal persona.
 - Refresh relay metadata from the JSON catalog behind pi.dev/models before discovery, with forced checks for command/tool sync and a four-hour interval otherwise.

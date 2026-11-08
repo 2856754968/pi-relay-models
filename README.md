@@ -8,6 +8,7 @@
 
 - 从兼容端点的 `/models` 自动发现模型 ID。
 - 按精确模型 ID 复用 pi 官方名称、推理能力、输入模态、价格、上下文窗口、最大输出、thinking map 和兼容性配置。
+- GPT 的 `-fast` 型号没有精确目录条目时，继承去掉该后缀后的 OpenAI 基础模型元信息（其次使用 OpenAI Codex 目录），请求仍保留完整的 `-fast` ID。人工映射优先；继承的价格仅为基础模型参考价，不代表中转站快速线路售价。
 - Claude 模型使用 Anthropic Messages，OpenAI 新模型使用 Responses，其他模型默认使用 Chat Completions。
 - 未匹配模型使用保守默认元信息，并提供相近的官方候选供人工确认。
 - 持久保存人工元信息映射、单模型协议覆盖和排除规则。

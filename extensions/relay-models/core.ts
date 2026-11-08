@@ -368,7 +368,13 @@ export function materializeRelayModels(
 	const excluded = new Set(config.excludedModels ?? []);
 	for (const id of [...new Set(modelIds.map((value) => value.trim()).filter(Boolean))].filter((value) => !excluded.has(value))) {
 		const mapping = config.modelMappings?.[id];
-		const source = mapping ? byReference.get(`${mapping.provider}/${mapping.id}`) : index.get(id);
+		let source = mapping ? byReference.get(`${mapping.provider}/${mapping.id}`) : index.get(id);
+		// Relay fast variants reuse OpenAI capabilities without changing the requested ID.
+		// Keep this fallback narrower than fuzzy matching and prefer exact catalog entries.
+		if (!mapping && !source && id.startsWith("gpt-") && id.endsWith("-fast")) {
+			const baseId = id.slice(0, -5);
+			source = byReference.get(`openai/${baseId}`) ?? byReference.get(`openai-codex/${baseId}`);
+		}
 		if (source) {
 			models.push(copyOfficialModel(config, id, source));
 			matches.push({

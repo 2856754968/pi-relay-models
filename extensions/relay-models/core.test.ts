@@ -170,6 +170,54 @@ test("copies official metadata while replacing routing fields", () => {
 	});
 });
 
+test("inherits OpenAI metadata for relay GPT fast variants while preserving requested IDs", () => {
+	const baseIds = ["gpt-6.1-terra", "gpt-6-astra", "gpt-6.1-sol"];
+	const catalog = baseIds.map((id) => model({
+		id, provider: "openai", api: "openai-responses",
+		thinkingLevelMap: { high: "high" },
+		compat: { supportsStore: false },
+	}));
+	const result = materializeRelayModels(relay, baseIds.map((id) => `${id}-fast`), catalog);
+	assert.deepEqual(result.matches, baseIds.map((id) => ({
+		remoteModelId: `${id}-fast`, metadataSource: { provider: "openai", id },
+	})));
+	for (const [index, base] of catalog.entries()) {
+		assert.deepEqual(result.models[index], {
+			...base, id: `${base.id}-fast`, provider: relay.id, baseUrl: relay.baseUrl,
+		});
+	}
+});
+
+test("prefers exact fast entries and explicit mappings over base-model metadata", () => {
+	const base = model({ id: "gpt-6-astra", provider: "openai", api: "openai-responses" });
+	const exact = model({ id: "gpt-6-astra-fast", provider: "openai", api: "openai-responses", contextWindow: 300_000 });
+	const mapped = model({ id: "another-model", provider: "openai", api: "openai-responses", contextWindow: 400_000 });
+	assert.equal(materializeRelayModels(relay, [exact.id], [base, exact]).models[0]?.contextWindow, 300_000);
+	const config = { ...relay, modelMappings: { [exact.id]: { provider: mapped.provider, id: mapped.id } } };
+	assert.equal(materializeRelayModels(config, [exact.id], [base, exact, mapped]).models[0]?.contextWindow, 400_000);
+	assert.equal(materializeRelayModels(config, [exact.id], [base]).models[0]?.reasoning, false);
+});
+
+test("keeps protocol overrides and exclusions for fast variants and supports Codex catalog fallback", () => {
+	const base = model({ id: "gpt-6-astra", provider: "openai-codex", api: "openai-codex-responses" });
+	const id = `${base.id}-fast`;
+	const result = materializeRelayModels({ ...relay, protocolOverrides: { [id]: "openai-completions" } }, [id], [base]);
+	assert.equal(result.models[0]?.api, "openai-completions");
+	assert.equal(result.matches[0]?.metadataSource.provider, "openai-codex");
+	assert.equal(materializeRelayModels({ ...relay, excludedModels: [id] }, [id], [base]).models.length, 0);
+});
+
+test("does not guess metadata for other suffixes, non-GPT models, or unrelated providers", () => {
+	const catalog = [
+		model({ id: "gpt-6-astra", provider: "openai", api: "openai-responses" }),
+		model({ id: "claude-x", provider: "anthropic", api: "anthropic-messages" }),
+		model({ id: "gpt-unknown", provider: "third-party", api: "openai-completions" }),
+	];
+	const result = materializeRelayModels(relay, ["gpt-6-astra-turbo", "claude-x-fast", "gpt-unknown-fast", "gpt-missing-fast"], catalog);
+	assert.deepEqual(result.matches, []);
+	assert.ok(result.models.every((entry) => entry.reasoning === false));
+});
+
 test("uses a user-approved mapping while preserving the relay model ID", () => {
 	const official = model({ id: "claude-sonnet-4-6", provider: "anthropic", api: "anthropic-messages", name: "Claude Sonnet 4.6" });
 	const result = materializeRelayModels(

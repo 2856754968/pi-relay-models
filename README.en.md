@@ -8,6 +8,7 @@ A mixed-protocol relay extension for [pi](https://github.com/earendil-works/pi-m
 
 - Discovers model IDs from a compatible `/models` endpoint.
 - Reuses official names, reasoning capabilities, input modalities, pricing, context windows, output limits, thinking maps, and compatibility settings by exact model ID.
+- When a GPT `-fast` variant has no exact catalog entry, it inherits metadata from the OpenAI base model without that suffix, falling back to the OpenAI Codex catalog. Requests keep the full `-fast` ID, and manual mappings take precedence. Inherited pricing is a base-model estimate, not the relay's fast-tier price.
 - Routes Claude models through Anthropic Messages, newer OpenAI models through Responses, and other models through Chat Completions by default.
 - Adds unmatched models with conservative fallback metadata and suggests nearby official candidates for review.
 - Persists user-approved metadata mappings, per-model protocol overrides, and model exclusions.
