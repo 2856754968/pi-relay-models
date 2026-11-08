@@ -332,6 +332,7 @@ function copyOfficialModel(config: RelayConfig, id: string, source: Model<Api>):
 	const protocol = config.protocolOverrides?.[id] ?? inferRelayProtocol(source, config.protocol);
 	return {
 		...copied,
+		name: id.endsWith("-fast") ? `[快速] ${copied.name}` : copied.name,
 		id,
 		provider: config.id,
 		api: protocol,
@@ -343,7 +344,7 @@ function fallbackModel(config: RelayConfig, id: string): Model<Api> {
 	const protocol = config.protocolOverrides?.[id] ?? config.protocol;
 	return {
 		id,
-		name: id,
+		name: id.endsWith("-fast") ? `[快速] ${id}` : id,
 		provider: config.id,
 		api: protocol,
 		baseUrl: normalizeBaseUrlForProtocol(config.baseUrl, protocol),

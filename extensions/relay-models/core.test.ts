@@ -183,9 +183,26 @@ test("inherits OpenAI metadata for relay GPT fast variants while preserving requ
 	})));
 	for (const [index, base] of catalog.entries()) {
 		assert.deepEqual(result.models[index], {
-			...base, id: `${base.id}-fast`, provider: relay.id, baseUrl: relay.baseUrl,
+			...base, id: `${base.id}-fast`, name: `[快速] ${base.name}`, provider: relay.id, baseUrl: relay.baseUrl,
 		});
 	}
+});
+
+test("prefixes fast display names for exact matches, mappings and unmatched models only", () => {
+	const base = model({ id: "gpt-6-astra", name: "GPT Astra", provider: "openai", api: "openai-responses" });
+	const exact = model({ ...base, id: "gpt-6-astra-fast", name: "GPT Astra Fast" });
+	const ids = [base.id, exact.id, "relay-fast", "unknown-fast", "breakfast"];
+	const config = { ...relay, modelMappings: { "relay-fast": { provider: base.provider, id: base.id } } };
+	const result = materializeRelayModels(config, ids, [base, exact]);
+	assert.deepEqual(result.models.map(({ id, name }) => ({ id, name })), [
+		{ id: base.id, name: "GPT Astra" },
+		{ id: exact.id, name: "[快速] GPT Astra Fast" },
+		{ id: "relay-fast", name: "[快速] GPT Astra" },
+		{ id: "unknown-fast", name: "[快速] unknown-fast" },
+		{ id: "breakfast", name: "breakfast" },
+	]);
+	assert.equal(base.name, "GPT Astra");
+	assert.equal(exact.name, "GPT Astra Fast");
 });
 
 test("prefers exact fast entries and explicit mappings over base-model metadata", () => {
