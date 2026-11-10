@@ -38,7 +38,7 @@ test("command and AI sync fetch website metadata before relay discovery, retain 
 		assert.equal(String(url), "https://relay.example/v1/models");
 		assert.equal(new Headers(options?.headers).get("authorization"), "Bearer relay-secret");
 		calls.push("relay");
-		return Response.json({ data: [{ id: stale.id }] });
+		return Response.json({ data: [{ id: stale.id }, { id: "jev-1.14.0" }] });
 	};
 	const { default: extension } = await import("./index.ts");
 	let provider!: Provider;
@@ -57,10 +57,17 @@ test("command and AI sync fetch website metadata before relay discovery, retain 
 		modelRegistry: {
 			getAll: () => [stale],
 			async refresh() {
-				await provider.refreshModels!({
-					credential: { type: "api_key", key: "relay-secret" }, allowNetwork: true,
+				// Support both the original store context and Pi 1.5.1's publication context.
+				const refreshContext = {
+					credential: { type: "api_key" as const, key: "relay-secret" }, allowNetwork: true,
+					signal: new AbortController().signal,
 					store: { async read() { return undefined; }, async write() {}, async delete() {} },
-				});
+					async publish(publication: { update?: () => void }) {
+						publication.update?.();
+						return true;
+					},
+				};
+				await provider.refreshModels!(refreshContext);
 			},
 		},
 	};
@@ -68,6 +75,10 @@ test("command and AI sync fetch website metadata before relay discovery, retain 
 	assert.deepEqual(calls, ["official", "relay"]);
 	assert.equal(provider.getModels()[0]!.contextWindow, 1_000_000);
 	assert.equal(provider.getModels()[0]!.maxTokens, 128_000);
+	assert.equal(provider.getModels().length, 1);
+	// SAFETY: optional method is absent on chat-only SDKs and present on classifier-capable SDKs.
+	const allModels = (provider as unknown as { getAllModels?: () => Array<{ id: string; type?: string }> }).getAllModels?.();
+	if (allModels) assert.ok(allModels.some((model) => model.id === "jev-1.14.0" && model.type === "classifier"));
 	assert.match(provider.getModels()[0]!.headers!["anthropic-beta"]!, /context-1m/);
 	sessionStart({}, ctx);
 	await ctx.modelRegistry.refresh();

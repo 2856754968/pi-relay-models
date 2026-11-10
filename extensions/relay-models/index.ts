@@ -12,7 +12,6 @@ import {
 	openAICompletionsApi,
 	openAIResponsesApi,
 	type Provider,
-	StringEnum,
 } from "@earendil-works/pi-ai/compat";
 import {
 	DEFAULT_MAX_BYTES,
@@ -46,6 +45,7 @@ import { mergeOfficialCatalog, OfficialCatalog, type OfficialCatalogStatus } fro
 import { SPOOF_HEADER_PROFILES } from "./header-profiles.ts";
 import { deleteJsonRecordKey } from "./state.ts";
 import { formatHistoricalUsage, scanHistoricalUsage } from "./usage.ts";
+import { isJevModelId, loadClassifierApis, materializeRelayClassifiers, publishRelayModels } from "./classifiers.ts";
 
 interface ConfigFile {
 	version: 1;
@@ -59,6 +59,8 @@ interface SyncedModelStatus {
 }
 
 interface SyncStatus {
+	classifierModels: Array<{ id: string; api: "typesafe-system-one" }>;
+	classifierWarning?: string;
 	models: SyncedModelStatus[];
 	updatedAt: number;
 }
@@ -69,6 +71,8 @@ interface RelayReport {
 	baseUrl: string;
 	fallbackProtocol: RelayProtocol;
 	modelCount?: number;
+	classifierModels?: Array<{ id: string; api: "typesafe-system-one" }>;
+	classifierWarning?: string;
 	matchedModels: Array<SyncedModelStatus & { metadataSource: string }>;
 	unmatchedModels: Array<SyncedModelStatus & { candidates: ReturnType<typeof suggestOfficialCandidates> }>;
 	protocols?: Record<RelayProtocol, number>;
@@ -163,8 +167,11 @@ async function saveConfig(next: ConfigFile): Promise<void> {
 	await chmod(CONFIG_PATH, 0o600);
 }
 
+let classifierApis: Awaited<ReturnType<typeof loadClassifierApis>>;
 function makeProvider(config: RelayConfig): Provider<Api> {
 	return createProvider<Api>({
+		// Spread keeps older SDK types compatible; classifier-capable Pi consumes this option.
+		...(classifierApis ? { classifiers: classifierApis } : {}),
 		id: config.id,
 		name: config.name,
 		baseUrl: config.baseUrl,
@@ -197,7 +204,8 @@ function makeProvider(config: RelayConfig): Provider<Api> {
 			await remoteCatalog.refresh({ signal });
 			officialCatalog = mergeOfficialCatalog(officialCatalog, remoteCatalog.getModels());
 			const ids = await fetchModelIds(config, key, signal);
-			const materialized: RelayModelResponse = materializeRelayModels(config, ids, officialCatalog);
+			const classifierModels = classifierApis ? materializeRelayClassifiers(config, ids) : [];
+			const materialized: RelayModelResponse = materializeRelayModels(config, ids.filter((id) => !isJevModelId(id)), officialCatalog);
 			const result: RelayModelResponse = {
 				...materialized,
 				models: materialized.models.map((model) => {
@@ -212,6 +220,8 @@ function makeProvider(config: RelayConfig): Provider<Api> {
 				]),
 			);
 			syncStatuses.set(config.id, {
+				classifierModels: classifierModels.map(({ id, api }) => ({ id, api })),
+				...(!classifierApis && ids.some(isJevModelId) ? { classifierWarning: "Jev classifiers require Pi 1.5.1 or newer." } : {}),
 				models: result.models.map((model) => {
 					if (!isRelayProtocol(model.api)) throw new Error(`Unsupported relay model protocol: ${model.api}`);
 					const metadataSource = metadataSources.get(model.id);
@@ -219,7 +229,7 @@ function makeProvider(config: RelayConfig): Provider<Api> {
 				}),
 				updatedAt: Date.now(),
 			});
-			return result.models;
+			return publishRelayModels(result.models, classifierModels);
 		},
 		api: {
 			"openai-completions": openAICompletionsApi(),
@@ -375,18 +385,20 @@ function relayStatusResultPreview(reports: readonly RelayReport[]): { text: stri
 	for (const report of reports) {
 		lines.push(`${report.providerId} (${report.displayName})`);
 		if (report.officialCatalog?.warning) lines.push(`  ${report.officialCatalog.warning}`);
+		if (report.classifierWarning) lines.push(`  ${report.classifierWarning}`);
 		if (report.modelCount === undefined) {
 			lines.push(`  not synced; run /login ${report.providerId}`);
 			continue;
 		}
 		lines.push(
-			`  ${report.modelCount} models • ${report.matchedModels.length} matched • ${report.unmatchedModels.length} unmatched`,
+			`  ${report.modelCount} models • ${report.matchedModels.length} matched • ${report.unmatchedModels.length} unmatched${report.classifierModels?.length ? ` • ${report.classifierModels.length} classifiers` : ""}`,
 		);
 		const modelLines = [
 			...report.matchedModels.map(
 				(model) => `  ✓ ${model.id} → ${model.metadataSource} (${model.protocol})`,
 			),
 			...report.unmatchedModels.map((model) => `  ? ${model.id} (${model.protocol})`),
+			...(report.classifierModels ?? []).map((model) => `  ✓ ${model.id} (classifier; ${model.api})`),
 		];
 		for (const line of modelLines) {
 			if (displayedModels < RELAY_STATUS_PREVIEW_MODELS) {
@@ -425,7 +437,9 @@ function relayReports(providerId?: string): RelayReport[] {
 				displayName: config.name,
 				baseUrl: config.baseUrl,
 				fallbackProtocol: config.protocol,
-				modelCount: status?.models.length,
+				modelCount: status ? status.models.length + status.classifierModels.length : undefined,
+				classifierModels: status?.classifierModels ?? [],
+				...(status?.classifierWarning ? { classifierWarning: status.classifierWarning } : {}),
 				matchedModels,
 				unmatchedModels,
 				...(status ? { protocols, syncedAt: new Date(status.updatedAt).toISOString() } : {}),
@@ -835,6 +849,7 @@ async function syncRelays(ctx: ExtensionCommandContext): Promise<void> {
 }
 
 export default async function relayModelsExtension(pi: ExtensionAPI) {
+	classifierApis = await loadClassifierApis();
 	await remoteCatalog.restore();
 	officialCatalog = mergeOfficialCatalog(officialCatalog, remoteCatalog.getModels());
 	try {
@@ -880,10 +895,14 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 			return new Text(theme.fg("toolOutput", preview.text) + hint, 0, 0);
 		},
 		parameters: Type.Object({
-			action: StringEnum(["add", "remove", "sync", "status", "map", "unmap", "protocol", "clear", "exclude", "include"] as const),
+			action: Type.Union([
+				Type.Literal("add"), Type.Literal("remove"), Type.Literal("sync"), Type.Literal("status"),
+				Type.Literal("map"), Type.Literal("unmap"), Type.Literal("protocol"), Type.Literal("clear"),
+				Type.Literal("exclude"), Type.Literal("include"),
+			]),
 			baseUrl: Type.Optional(Type.String({ description: "Relay Base URL for action=add" })),
 			protocol: Type.Optional(
-				StringEnum(["openai-completions", "openai-responses", "anthropic-messages"] as const, {
+				Type.Union([Type.Literal("openai-completions"), Type.Literal("openai-responses"), Type.Literal("anthropic-messages")], {
 					description: "Fallback for add, override for protocol/single map, or default for a mappings batch",
 				}),
 			),
@@ -906,7 +925,7 @@ export default async function relayModelsExtension(pi: ExtensionAPI) {
 						officialProvider: Type.String(),
 						officialModelId: Type.String(),
 						protocol: Type.Optional(
-							StringEnum(["openai-completions", "openai-responses", "anthropic-messages"] as const),
+							Type.Union([Type.Literal("openai-completions"), Type.Literal("openai-responses"), Type.Literal("anthropic-messages")]),
 						),
 					}),
 					{

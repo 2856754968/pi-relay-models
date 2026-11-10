@@ -140,6 +140,41 @@ pi -e npm:pi-relay-models
 
 识别 fork/clone 副本时忽略 `parentId` 并去重；所有分支和压缩前的历史均计入。缺少供应商或模型信息的工具/摘要用量单列为未归属，不会归入筛选的供应商。已删除或缺失的用量无法恢复；预估费用不保证等于中转站账单，旧迁移/复制记录的身份也不总能完全确认。
 
+## Jev 决策模型
+
+Pi 1.5.1 或更高版本中，扩展会将中转实际返回的 `jev-1.14.0`、`jev-latest` 等 Jev ID 注册为同一 Provider 下的 `classifier`，使用 Pi 内置 `typesafe-system-one` 实现，请求 `<Base URL>/systemone`，复用该 Provider 的 `/login` 凭据。Jev 不再出现在聊天模型选择菜单中；`status` 会单列 `classifierModels`，排除规则同样生效。旧版 Pi 保留聊天支持并提示升级，不会把 Jev 当聊天模型。
+
+中转必须实现 System One 接口，仅在 `/models` 中列出 Jev 不代表支持该接口。当前按文本分类注册，64K 上下文沿用 Pi 的 Jev 基准；价格未知时记为零，这不代表服务免费。不从聊天模型目录推断分类器价格或图像能力。
+
+更新本地扩展后执行 `/reload`，再运行 `/relay-sync relay-semi`。通过 codemode 发现模型并调用：
+
+```js
+const available = await models.getAvailableOfType("classifier");
+const jev = available.find(m => m.provider === "relay-semi" && m.id === "jev-1.14.0");
+if (!jev) throw new Error("Jev 尚未发现，请检查登录和模型同步");
+const result = await models.classify(jev, {
+  state: { message: "服务不可用，请立即处理。" },
+  questions: {
+    category: {
+      type: "choice", instructions: "判断消息类别。",
+      criteria: { incident: "故障报告", praise: "正面反馈" },
+    },
+    urgent: {
+      type: "bool", instructions: "是否需要立即处理？",
+      criteria: { true: "立即处理", false: "可以等待" },
+    },
+    severity: {
+      type: "score", instructions: "评估严重程度。",
+      criteria: ["无问题", "轻微问题", "服务不可用"],
+    },
+  },
+});
+if (result.stopReason !== "stop") throw new Error(result.errorMessage);
+return result.answers;
+```
+
+`choice` 返回选项、各选项的 `probabilities` 和 `confidence`；`bool` 返回成立概率 `probability`；`score` 返回评分 `score` 和置信度 `confidence`，不提供与选择题相同的概率分布。评分标准按数组顺序从 0 编号。codemode 需要已启用；参见 [Pi codemode 文档](https://pi.dev/docs/latest/codemode)。
+
 ## 混合协议路由
 
 每个中转站 Provider 同时注册三种 API：
@@ -151,6 +186,16 @@ pi -e npm:pi-relay-models
 匹配到官方目录后，扩展根据官方模型来源选择协议。人工协议覆盖的优先级最高；未匹配模型使用 Provider 的回退协议。
 
 Anthropic 模型会自动移除 Base URL 末尾的 `/v1`，避免 SDK 生成重复的 `/v1/v1/messages` 路径。
+
+### Pi 1.5.1 兼容性
+
+扩展使用 Pi 内置的协议实现，升级 Pi 后会直接获得对应修复，包括 OpenAI Responses 的 `session-id` 会话亲和请求头；无需修改固定请求头配置。
+
+- **Anthropic 消息线程**：Pi 1.5.1 默认只为 `anthropic` Provider 且地址包含 `api.anthropic.com` 的模型启用。扩展会将模型的 Provider 和地址替换成中转配置，普通中转不会仅因匹配到官方模型而自动启用。官方目录中显式声明的 `compat` 字段仍会保留，包括 `supportsMessageThreads`；只有确认网关支持转发 `thread` 时才应启用该能力。
+- **禁用工具后的请求**：Pi 1.5.1 在没有启用工具时默认省略 `tools` 字段。旧 LiteLLM 等要求工具历史存在时仍携带该字段的网关，需要模型兼容设置 `compat.requiresToolsWithToolHistory: true`。这是特定网关的配置，不应对所有中转统一启用。
+- 上述配置属于 Pi 的模型兼容设置，参见 [Pi 模型配置文档](https://pi.dev/docs/latest/models-configuration)。`relay_models` 工具和 `relay-providers.json` 不提供任意 `compat` 字段编辑功能。
+
+Pi 1.5.1 也支持在终端运行 `pi auth login <provider-id>` 和 `pi auth logout <provider-id>`。登录时使用交互式秘密输入，不要把 API Key 发到聊天中。
 
 ## 配置和凭据
 
@@ -182,11 +227,19 @@ extensions/relay-models/header-profiles.ts
 ## 开发
 
 ```bash
-npm install
+npm install --include=dev
 npm run validate
 ```
 
-测试只启动本机临时 HTTP 服务，不访问真实中转站。
+开发依赖锁定 Pi `1.5.1`，最低支持版本仍为 `0.82.1`。CI 对这两个版本分别运行类型检查和全部测试。可在本地临时安装最低版本验证，再恢复锁定依赖：
+
+```bash
+npm install --include=dev --no-save --package-lock=false @earendil-works/pi-ai@0.82.1 @earendil-works/pi-coding-agent@0.82.1 @earendil-works/pi-tui@0.82.1
+npm run validate
+npm ci --include=dev
+```
+
+测试使用本机临时 HTTP 服务或模拟 fetch，不访问真实中转站。
 
 ## 许可证
 

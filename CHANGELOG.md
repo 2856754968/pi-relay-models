@@ -4,6 +4,14 @@ All notable changes to this project are documented here.
 
 ## Unreleased
 
+- Discover relay-returned Jev models as native Pi classifiers under the existing provider and credentials, supporting codemode choice probabilities, boolean probabilities, and scores with confidence through System One.
+- Keep Jev out of chat selection, report classifiers separately, respect exclusions, and retain chat support with an upgrade warning on SDKs without classifier support.
+
+- Pin development dependencies to Pi 1.5.1 and validate both 0.82.1 and 1.5.1 in CI without raising the minimum supported version.
+- Define tool enums with TypeBox literal unions to preserve parameter inference across Pi versions, and adapt the catalog integration fixture to the newer refresh publication context.
+- Test that ordinary relay requests do not inherit Anthropic's default message-thread enablement, while preserving explicit catalog compatibility settings without mutating the source model.
+- Document Pi 1.5.1 authentication commands, message-thread requirements, disabled-tool compatibility, and the built-in Responses affinity-header fix in both READMEs.
+
 - Match relay GPT `-fast` variants to OpenAI base-model metadata when no exact entry exists, preserving remote IDs, explicit mappings, protocol overrides, and exclusions.
 
 - Add `/relay-usage [provider-id]` to summarize local usage across projects and providers by requested model, including token totals, recorded estimated costs, copy deduplication, and unattributed usage, without network requests or history rewrites.

@@ -10,11 +10,20 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pi-version: ["0.82.1", "1.5.1"]
+    env:
+      NODE_ENV: development
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - run: npm ci
+      - run: npm ci --include=dev
+      - name: Install minimum supported Pi
+        if: matrix.pi-version == '0.82.1'
+        run: npm install --include=dev --no-save --package-lock=false @earendil-works/pi-ai@0.82.1 @earendil-works/pi-coding-agent@0.82.1 @earendil-works/pi-tui@0.82.1
       - run: npm run validate

@@ -140,6 +140,41 @@ Results group by provider and requested model ID (not `responseModel`), showing 
 
 Fork/clone copies are deduplicated without using `parentId` in their identity; all branches and history before compaction count. Tool/summary usage missing provider or model information appears in a separate unattributed bucket and is never assigned to the filtered provider. Deleted or missing usage cannot be recovered; estimates may differ from relay billing, and old migrated/copied identities cannot always be proven perfectly.
 
+## Jev decision models
+
+On Pi 1.5.1 or newer, relay-returned Jev IDs such as `jev-1.14.0` and `jev-latest` are registered as `classifier` models under the same provider. They use Pi's built-in `typesafe-system-one` implementation at `<Base URL>/systemone` and reuse that provider's `/login` credentials. Jev no longer appears in the chat model picker. Status lists `classifierModels` separately, and exclusions still apply. Older Pi versions retain chat support and report an upgrade warning rather than treating Jev as chat.
+
+The relay must implement System One; listing Jev in `/models` alone is insufficient. Models are registered for text classification with Pi's 64K Jev baseline context window. Unknown pricing is recorded as zero, which does not mean the service is free. Classifier pricing and image capabilities are not inferred from the chat catalog.
+
+After updating the local extension, run `/reload`, then `/relay-sync relay-semi`. With codemode enabled, discover and call the classifier:
+
+```js
+const available = await models.getAvailableOfType("classifier");
+const jev = available.find(m => m.provider === "relay-semi" && m.id === "jev-1.14.0");
+if (!jev) throw new Error("Jev unavailable; check login and model sync");
+const result = await models.classify(jev, {
+  state: { message: "Service unavailable. Please fix it immediately." },
+  questions: {
+    category: {
+      type: "choice", instructions: "Classify the message.",
+      criteria: { incident: "Service failure", praise: "Positive feedback" },
+    },
+    urgent: {
+      type: "bool", instructions: "Does this require immediate attention?",
+      criteria: { true: "Immediate attention", false: "Can wait" },
+    },
+    severity: {
+      type: "score", instructions: "Rate severity.",
+      criteria: ["No issue", "Minor issue", "Service unavailable"],
+    },
+  },
+});
+if (result.stopReason !== "stop") throw new Error(result.errorMessage);
+return result.answers;
+```
+
+`choice` returns the selected option, per-option `probabilities`, and `confidence`. `bool` returns the probability of true as `probability`. `score` returns `score` and `confidence`, rather than a choice-style probability distribution; criteria are indexed from zero in array order. See [Pi's codemode documentation](https://pi.dev/docs/latest/codemode) for enabling codemode.
+
 ## Mixed-protocol routing
 
 Each relay provider registers all three APIs:
@@ -151,6 +186,16 @@ Each relay provider registers all three APIs:
 When an official catalog match exists, the extension infers the protocol from that model. A manual protocol override has the highest priority. Unmatched models use the provider fallback protocol.
 
 For Anthropic models, a trailing `/v1` is removed from the Base URL to prevent SDK requests to `/v1/v1/messages`.
+
+### Pi 1.5.1 compatibility
+
+The extension uses Pi's built-in protocol implementations, so upgrading Pi also applies their fixes, including the OpenAI Responses `session-id` affinity header. No fixed header profile changes are needed.
+
+- **Anthropic message threads**: Pi 1.5.1 enables them by default only for the `anthropic` provider with a URL containing `api.anthropic.com`. The extension replaces the provider and URL with the relay configuration, so matching an official model alone does not enable threads on an ordinary relay. Explicit catalog `compat` fields are still preserved, including `supportsMessageThreads`; enable this capability only after confirming that the gateway forwards `thread`.
+- **Requests with tools disabled**: Pi 1.5.1 omits `tools` by default when no tools are enabled. Gateways such as older LiteLLM versions that require the field when tool history exists need the model compatibility setting `compat.requiresToolsWithToolHistory: true`. This is specific to the gateway and should not be enabled for every relay.
+- These are Pi model compatibility settings; see [Pi's model configuration documentation](https://pi.dev/docs/latest/models-configuration). Neither the `relay_models` tool nor `relay-providers.json` provides arbitrary `compat` editing.
+
+Pi 1.5.1 also supports `pi auth login <provider-id>` and `pi auth logout <provider-id>` from a terminal. Use the interactive secret prompt for login; never send an API key in chat.
 
 ## Configuration and credentials
 
@@ -182,11 +227,19 @@ These profiles are intended for relays that require client-specific compatibilit
 ## Development
 
 ```bash
-npm install
+npm install --include=dev
 npm run validate
 ```
 
-The tests only start a temporary local HTTP server and do not call a real relay.
+Development dependencies are pinned to Pi `1.5.1`; the minimum supported version remains `0.82.1`. CI runs type checking and the full test suite against both versions. To check the minimum version locally and then restore the locked dependencies:
+
+```bash
+npm install --include=dev --no-save --package-lock=false @earendil-works/pi-ai@0.82.1 @earendil-works/pi-coding-agent@0.82.1 @earendil-works/pi-tui@0.82.1
+npm run validate
+npm ci --include=dev
+```
+
+Tests use temporary local HTTP servers or mocked fetch and do not call a real relay.
 
 ## License
 
